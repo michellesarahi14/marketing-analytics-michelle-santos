@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import TruncatedSVD
+from pathlib import Path
 
 st.set_page_config(page_title="Recomendador — Laboratorio", page_icon="☕", layout="wide")
 
@@ -23,11 +24,20 @@ GRIS = "#9A988E"
 
 @st.cache_data
 def cargar():
-    catalogo = pd.read_csv("data/catalogo.csv")
-    hist = pd.read_csv("data/ordenes_historial.csv")
-    hold = pd.read_csv("data/ordenes_holdout.csv")
-    exp = pd.read_csv("data/experimento.csv")
-    clientes = pd.read_csv("data/clientes.csv")
+    # Buscamos los datos según dónde esté guardado el archivo.
+    carpeta = Path(__file__).resolve().parent
+    opciones = [carpeta / "data", carpeta.parent / "data", carpeta.parent.parent / "data"]
+    datos = next((ruta for ruta in opciones if (ruta / "catalogo.csv").is_file()), None)
+
+    if datos is None:
+        st.error("No encontramos los archivos CSV. Revisa que la carpeta data esté en Tarea, Semana_4 o en la raíz del repositorio.")
+        st.stop()
+
+    catalogo = pd.read_csv(datos / "catalogo.csv")
+    hist = pd.read_csv(datos / "ordenes_historial.csv")
+    hold = pd.read_csv(datos / "ordenes_holdout.csv")
+    exp = pd.read_csv(datos / "experimento.csv")
+    clientes = pd.read_csv(datos / "clientes.csv")
     productos = list(catalogo["item"])
     M = (pd.crosstab(hist["customer_id"], hist["item"]) > 0).astype(int).reindex(
         index=clientes["customer_id"], columns=productos, fill_value=0)
@@ -100,7 +110,7 @@ def top3(scores, x_vec):
 
 # --- Título ---
 st.title("☕ Recomendador de productos")
-st.caption("TODO: escriban aquí una frase sobre qué decisión de negocio ayuda a tomar esta app.")
+st.caption("Esta aplicación ayuda a recomendar productos según las compras de cada cliente y a comparar los diferentes métodos.")
 
 
 # TODO 4: Controles para elegir cómo queremos las recomendaciones.
@@ -167,51 +177,51 @@ with tab1:
 
         producto = productos[j]
         puntaje = scores[j]
-        if len(comprados) == 0:
-            porque = "Es uno de los productos más comprados por los clientes."
-        elif metodo == "Popularidad":
-            porque = "Es uno de los productos más populares de la cafetería."
-        elif metodo == "Filtrado por ítem":
 
-            # Buscamos cuál de sus compras se parece más al producto.
+
+        if len(comprados) == 0:
+            porque = "Es uno de los productos más comprados."
+
+        elif metodo == "Popularidad":
+            porque = "Es uno de los productos más populares."
+
+        elif metodo == "Filtrado por ítem":
             similares = np.where(x_vec > 0)[0]
             mejor = similares[np.argmax(S_it[similares, j])]
+
             porque = (
                 f"Porque ya compró {productos[mejor]}, "
                 f"que tiene una similitud de {S_it[mejor, j]:.2f}."
             )
+
         elif metodo == "Filtrado por cliente":
-            # Buscamos los vecinos más parecidos al cliente.
             sims = cosine_similarity(x_vec[None, :], X)[0]
             sims[fila] = -1
             vecinos = np.argsort(sims)[-K:]
-            # Contamos cuántos vecinos compraron el producto.
             cantidad = int(X[vecinos, j].sum())
+
             porque = (
                 f"{cantidad} de los {K} clientes más similares "
                 f"compraron este producto."
             )
-        # Mostramos el resultado.
-        st.markdown(f"### {i + 1}. {producto}")
-        st.write(f"**Puntaje:** {puntaje:.2f}")
-        st.write(f"**¿Por qué?** {porque}")
-        st.divider()
-        elif metodo == "SVD (8 factores)":
 
-            # SVD encuentra patrones en las compras de los clientes.
+        elif metodo == "SVD (8 factores)":
             porque = (
                 "Lo recomendamos porque el modelo encontró "
                 "patrones de compra relacionados con este producto."
             )
 
         elif metodo == "Final (ítem + respaldo)":
-
-            # Si tiene historial, buscamos productos similares.
-            # Si no tiene compras, usamos los más populares.
             porque = (
                 "Lo recomendamos tomando en cuenta "
                 "los productos que ya compró."
             )
+
+        # Mostramos cada recomendación con su puntaje y explicación.
+        st.markdown(f"### {i + 1}. {producto}")
+        st.write(f"**Puntaje:** {puntaje:.2f}")
+        st.write(f"**¿Por qué?** {porque}")
+        st.divider()
 
 
 # TODO 6: Comparar los métodos de recomendación.
@@ -229,12 +239,15 @@ with tab2:
     filas_control = np.where(elegibles)[0]
 
     # Elegimos cuántos clientes queremos evaluar.
+    if len(filas_control) == 0:
+        st.warning("No hay clientes elegibles del grupo de control para comparar.")
+        st.stop()
     cantidad = st.slider(
         "Cantidad de clientes a evaluar",
-        min_value=50,
+        min_value=1,
         max_value=min(500, len(filas_control)),
         value=min(200, len(filas_control)),
-        step=50
+        step=1
     )
 
     # Seleccionamos los primeros clientes del grupo de control.
@@ -265,6 +278,16 @@ with tab2:
             x_vec = X[fila]
             # Calculamos las recomendaciones para este cliente.
             scores = puntajes(nombre, x_vec, K, fila)
+
+            # Revisamos cuáles de los tres productos compró después.
+            recomendaciones = top3(scores, x_vec)
+            n_aciertos = int(NUEVO[fila, recomendaciones].sum())
+
+            # Contamos los clientes y productos en los que acertamos.
+            if n_aciertos > 0:
+                aciertos += 1
+            total_aciertos += n_aciertos
+            productos_recomendados.update(recomendaciones.tolist())
         
         # Calculamos las métricas.
         hit_rate = aciertos / len(muestra)
