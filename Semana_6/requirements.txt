@@ -3,3 +3,6 @@ pandas
 numpy
 nltk
 scikit-learn
+plotly
+kmodes
+
